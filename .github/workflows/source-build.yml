@@ -1,0 +1,85 @@
+name: source-build
+
+on:
+  schedule:
+    - cron: "*/30 * * * *" # every 30 minutes
+  workflow_dispatch:
+
+concurrency:
+  group: source-build
+  cancel-in-progress: false
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  source-build:
+    runs-on: ubuntu-26.04
+    environment: Build
+    steps:
+      - name: Read env variables
+        id: env_variables
+        env:
+          GH_TOKEN: ${{ secrets.VARS_TOKEN }} # has Environments RW
+        run: |
+          stored_upstream=$(gh variable get UPSTREAM_CHROMIUM_VERSION --env Build --repo "${GITHUB_REPOSITORY}")
+          echo "stored_upstream=${stored_upstream}" >> "${GITHUB_OUTPUT}"
+
+      - name: Get upstream version
+        id: get_upstream_version
+        run: |
+          curl -fLsS --retry 5 -o chromium-version.json "https://versionhistory.googleapis.com/v1/chrome/platforms/linux/channels/stable/versions/all/releases?filter=endtime=none"
+          version=$(jq -r '.releases[0].version' chromium-version.json)
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Failed to parse upstream version"
+            exit 1
+          fi
+          echo "current_upstream_version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Check whether a build is needed
+        id: check_build
+        env:
+          STORED_UPSTREAM: ${{ steps.env_variables.outputs.stored_upstream }}
+          CURRENT_UPSTREAM_VERSION: ${{ steps.get_upstream_version.outputs.current_upstream_version }}
+        run: |
+          if [[ "${CURRENT_UPSTREAM_VERSION}" == "${STORED_UPSTREAM}" ]]; then
+            echo "No upstream release change. No need to rebuild."
+            exit 0
+          fi
+          echo "need_build=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Run build
+        timeout-minutes: 360
+        if: steps.check_build.outputs.need_build == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.VARS_TOKEN }} # has Environments RW
+          WORKFLOW_NAME: ${{ github.workflow }}
+          CURRENT_UPSTREAM_VERSION: ${{ steps.get_upstream_version.outputs.current_upstream_version }}
+          COPR_WEBHOOK_URL: ${{ secrets.COPR_WEBHOOK_URL }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          curl -H "Content-Type: application/json" \
+            -d "{\"content\": \"Build **${WORKFLOW_NAME}** started for chromium \`${CURRENT_UPSTREAM_VERSION}\`\"}" \
+            "${DISCORD_WEBHOOK}"
+
+          gh variable set UPSTREAM_CHROMIUM_VERSION --env Build --body "${CURRENT_UPSTREAM_VERSION}" --repo "${GITHUB_REPOSITORY}"
+          BUILD_ID=$(curl -fLsS -X POST "${COPR_WEBHOOK_URL}")
+          while true; do
+            state=$(curl -fLsS --retry 5 "https://copr.fedorainfracloud.org/api_3/build/${BUILD_ID}" | jq -r '.state')
+            if [[ "${state}" == "succeeded" ]]; then
+              break
+            fi
+
+            if [[ "${state}" =~ ^(canceled|skipped|failed)$ ]]; then
+              exit 1
+            fi
+
+            sleep 60
+          done
+
+          curl -H "Content-Type: application/json" \
+            -d "{\"content\": \"Build **${WORKFLOW_NAME}** completed for chromium \`${CURRENT_UPSTREAM_VERSION}\`\"}" \
+            "${DISCORD_WEBHOOK}"
