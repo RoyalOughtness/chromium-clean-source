@@ -17,6 +17,7 @@ defaults:
 
 jobs:
   source-build:
+    name: Source Build
     runs-on: ubuntu-26.04
     environment: Build
     steps:
