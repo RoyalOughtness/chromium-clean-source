@@ -57,6 +57,7 @@ jobs:
         if: steps.check_build.outputs.need_build == 'true'
         env:
           GH_TOKEN: ${{ secrets.VARS_TOKEN }} # has Environments RW
+          CROSS_REPO_ACTIONS_TOKEN: ${{ secrets.CROSS_REPO_ACTIONS_TOKEN }} # has Environments RW
           WORKFLOW_NAME: ${{ github.workflow }}
           CURRENT_UPSTREAM_VERSION: ${{ steps.get_upstream_version.outputs.current_upstream_version }}
           COPR_WEBHOOK_URL: ${{ secrets.COPR_WEBHOOK_URL }}
@@ -84,3 +85,7 @@ jobs:
           curl -H "Content-Type: application/json" \
             -d "{\"content\": \"Build **${WORKFLOW_NAME}** completed for chromium \`${CURRENT_UPSTREAM_VERSION}\`\"}" \
             "${DISCORD_WEBHOOK}"
+
+          GH_TOKEN="${CROSS_REPO_ACTIONS_TOKEN}" gh workflow run rebuild.yml --repo secureblue/trivalent-subresource-filter --ref live
+          GH_TOKEN="${CROSS_REPO_ACTIONS_TOKEN}" gh workflow run build_x86_64.yml --repo secureblue/Trivalent --ref live
+          GH_TOKEN="${CROSS_REPO_ACTIONS_TOKEN}" gh workflow run build_aarch64.yml --repo secureblue/Trivalent --ref live
